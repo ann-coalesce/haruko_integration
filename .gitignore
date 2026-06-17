@@ -1,0 +1,6 @@
+credentials.py
+db_constants.py
+*.json
+*.csv
+venv/
+__pycache__/
