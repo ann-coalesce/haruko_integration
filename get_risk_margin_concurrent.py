@@ -6,56 +6,12 @@ from haruko_utils import HarukoAPI
 
 MAX_WORKERS = 5   # tune; 4-8 is typical for I/O work
 
-API_CREDENTIALS = [
-    {"pm": "algotoria", "account_id": "16"},
-    {"pm": "cta_alphamike", "account_id": "133"},
-    {"pm": "ctabravowhiskey", "account_id": "136"},
-    {"pm": "ctabravowhiskey2", "account_id": "152"},
-    {"pm": "bravowhiskey_btc", "account_id": "153"},
-    {"pm": "ctaalphazulu", "account_id": "179"},
-    {"pm": "ctaalphanovember", "account_id": "180"},
-    {"pm": "arbtangojuliett", "account_id": "195"},
-    {"pm": "ctauniform", "account_id": "196"},
-    {"pm": "ctabravo", "account_id": "198"},
-    {"pm": "bellwetherholding", "account_id": "199"},
-    {"pm": "testsierrayankee", "account_id": "205"},
-    {"pm": "mljuliettzulu", "account_id": "207"},
-    {"pm": "testkilonovember", "account_id": "208"},
-    {"pm": "farbtangoromeo", "account_id": "209"},
-    {"pm": "testnovember", "account_id": "210"},
-    {"pm": "arbpapasierra", "account_id": "213"},
-    {"pm": "discbravobravo", "account_id": "216"},
-    {"pm": "farbtangocharlie_bybit", "account_id": "219"},
-    {"pm": "farbtangocharlie1", "account_id": "220"},
-    {"pm": "ctasierratango", "account_id": "221"},	
-    {"pm": "optzulu", "account_id": "222"},
-    {"pm": "farbtangocharlie_gate", "account_id": "225"},
-    {"pm": "farbtangoalpha", "account_id": "226"},
-    {"pm": "farbtangobravo01_btc", "account_id": "227"},
-    {"pm": "farbtangobravo02_btc", "account_id": "228"},
-    {"pm": "farbtangobravo03_btc", "account_id": "229"},
-    {"pm": "farbtangobravo04_btc", "account_id": "230"},
-    {"pm": "farbtangobravo05_btc", "account_id": "231"},
 
-    # {"pm": "farbfoxtrot_btc", "account_id": "130"},
-    # {"pm": "ctauniformcharlie", "account_id": "140"},
-    # {"pm": "ctapapa", "account_id": "141"},
-    # {"pm": "ctaalphapapa", "account_id": "144"},
-    # {"pm": "opttangopapa_btc", "account_id": "145"},
-    # {"pm": "optalphadelta_btc", "account_id": "149"},
-    # {"pm": "farbvictorcharlie_bybit01_btc", "account_id": "177"},
-    # {"pm": "farbvictorcharlie_bybit02_btc", "account_id": "178"},
-    # {"pm": "ctaromeolima", "account_id": "181"},
-    # {"pm": "farbvictorcharlie_bitget01_btc", "account_id": "183"},
-    # {"pm": "farbvictorcharlie_binance01_btc", "account_id": "184"},
-    # {"pm": "farbvictorcharlie_binance02_btc", "account_id": "185"},
-    # {"pm": "farbvictorcharlie_bitget02_btc", "account_id": "186"},
-    # {"pm": "farbvictorcharlie_okx01_btc", "account_id": "187"},
-    # {"pm": "farbvictorcharlie_okx02_btc", "account_id": "188"},
-    # {"pm": "arbvictor", "account_id": "201"},
-    # {"pm": "ctaalphanovemberalpha", "account_id": "202"},
-    # {"pm": "coalesce", "account_id": "203"},
-]
+def load_credentials():
+    df = db_utils.get_db_table(
+        "SELECT pm, haruko_id FROM pm_mapping WHERE active = true AND haruko_id IS NOT NULL ORDER BY haruko_id"
+    )
+    return [{"pm": row.pm, "account_id": str(int(row.haruko_id))} for row in df.itertuples()]
 
 def fetch_haruko_balance(account_id: str):
     """Fetch margin balance data from Haruko for a specific account"""
@@ -121,18 +77,27 @@ def main():
     logging.info(f"Program started at {start_ts.isoformat()}")
 
     try:
+        credentials = load_credentials()
+        logging.info(f"Loaded {len(credentials)} active accounts from pm_mapping")
         curr = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         dfs = []
 
+        pms_with_data = set()
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-            futures = {pool.submit(fetch_and_parse, c, curr): c for c in API_CREDENTIALS}
+            futures = {pool.submit(fetch_and_parse, c, curr): c for c in credentials}
             for fut in as_completed(futures):
                 df = fut.result()
                 if df is not None and not df.empty:
                     dfs.append(df)
+                    pms_with_data.add(df["pm"].iloc[0])
+
+        empty_pms = [c["pm"] for c in credentials if c["pm"] not in pms_with_data]
+        if empty_pms:
+            logging.warning(f"No margin data for ({len(empty_pms)}): {', '.join(sorted(empty_pms))}")
 
         if dfs:
             final_df = pd.concat(dfs, ignore_index=True)
+            logging.info(f"Writing {len(final_df)} rows for {len(pms_with_data)} PMs")
             db_utils.df_to_table("margin_risk_data", final_df)
             print(final_df)
         else:

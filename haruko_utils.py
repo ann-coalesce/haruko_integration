@@ -47,44 +47,34 @@ class HarukoAPI:
     def get_account_summary(self, accountIds):
         payload = {'venueAccountIds':accountIds}
         url = self._get_full_url(f"/cefi/api/summary/accounts")
-        print('base url',url)
         response = requests.get(url, headers=self.headers, params=payload)
-        # print(response.content)
         return self._handle_response(response)
-    
+
     def get_aggregate_transfers(self, accountIds, startTs=None):
         if startTs:
             payload = {'venueAccountIds':accountIds, 'startTs':startTs}
         else:
             payload = {'venueAccountIds':accountIds}
-        
+
         url = self._get_full_url(f"/cefi/api/aggregate/transfers")
-        # print('base url',url)
         response = requests.get(url, headers=self.headers, params=payload)
-        # print(response.content)
         return self._handle_response(response)
 
     def get_latest_price(self, venue='BINANCE'):
         url = self._get_full_url(f"/cefi/api/pricing/instruments/live")
-        print('base url',url)
         payload = {'venue':venue}
         response = requests.get(url, headers=self.headers, params=payload)
-        print(response.content)
         return self._handle_response(response)
-    
+
     def get_aggregate_balance(self, accountIds):
         payload = {'venueAccountIds':accountIds}
         url = self._get_full_url(f"/cefi/api/aggregate/balance")
-        print('base url',url)
         response = requests.get(url, headers=self.headers, params=payload)
-        print(response.content)
         return self._handle_response(response)
 
 
     def get_balance(self, accountId):
         payload = {'venueAccountId':accountId}
         url = self._get_full_url(f"/cefi/api/balance")
-        print('base url',url)
         response = requests.get(url, headers=self.headers, params=payload)
-        # print(response.content)
         return self._handle_response(response)
