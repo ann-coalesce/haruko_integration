@@ -4,13 +4,18 @@ Retrieves trade data from Haruko API and stores aggregated volumes.
 """
 
 import argparse
+import logging
 import credentials
 import requests
 from datetime import datetime, timezone
 from typing import Optional, Dict, List
 import pandas as pd
-import sheet_utils
 import db_utils
+
+# Accounts on Deribit — volume calculated in BTC instead of USD.
+# Update when Deribit accounts are added/removed.
+# (Can be moved to pm_mapping once an exchange column is added.)
+DERIBIT_PMS = {'deribit_master'}
 
 
 class HarukoAPIClient:
@@ -131,7 +136,7 @@ class HarukoAPIClient:
 class VolumeCalculator:
     """Calculates trading volumes with proper denomination handling."""
 
-    BTC_DENOMINATED_PMS = {'farbfoxtrot', 'optalphadelta', 'opttangopapa'}
+    BTC_DENOMINATED_PMS = DERIBIT_PMS
 
     def __init__(self, api_client: HarukoAPIClient):
         self.api_client = api_client
@@ -263,7 +268,7 @@ class TradingVolumeProcessor:
 
     def process_fund_accounts(self, start_ts: Optional[int] = None) -> pd.DataFrame:
         """
-        Process all fund accounts from mapping sheet.
+        Process all fund accounts from pm_mapping table.
 
         Args:
             start_ts: Start timestamp in milliseconds (defaults to today 00:00 UTC)
@@ -271,65 +276,43 @@ class TradingVolumeProcessor:
         Returns:
             Combined DataFrame with all fund trading volumes
         """
-        mapping_df = self._get_account_mapping('fund')
+        mapping_df = self._get_account_mapping()
 
         if mapping_df.empty:
-            print("No account mappings found")
+            logging.warning("No account mappings found in pm_mapping")
             return pd.DataFrame()
 
+        logging.info(f"Loaded {len(mapping_df)} active accounts from pm_mapping")
         volume_dfs: List[pd.DataFrame] = []
+        no_trades: List[str] = []
 
         for _, row in mapping_df.iterrows():
             pm = row['pm']
-
-            # Skip specific PMs
-            if pm in {'cpas', 'aurorecta'}:
-                continue
-
-            account_id = int(row['haruko id'])
-            print(f"Processing account {account_id} for {pm}")
+            account_id = int(row['haruko_id'])
 
             df = self.process_account_trades(account_id, pm, start_ts=start_ts)
             if not df.empty:
                 volume_dfs.append(df)
+            else:
+                no_trades.append(pm)
+
+        if no_trades:
+            logging.warning(f"No trades found for ({len(no_trades)}): {', '.join(sorted(no_trades))}")
 
         if not volume_dfs:
             return pd.DataFrame()
 
-        combined_df = pd.concat(volume_dfs, ignore_index=True)
-
-        # Add _btc suffix for BTC-denominated PMs
-        btc_mask = combined_df['pm'].isin(credentials.BTC_DENOMINATED)
-        combined_df.loc[btc_mask, 'pm'] += '_btc'
-
-        return combined_df
+        return pd.concat(volume_dfs, ignore_index=True)
 
     @staticmethod
-    def _get_account_mapping(group: str = 'fund') -> pd.DataFrame:
-        """
-        Retrieve account mapping from Google Sheets.
-
-        Args:
-            group: Sheet name to retrieve (e.g., 'fund', 'trial')
-
-        Returns:
-            DataFrame with account mappings
-        """
-        sheet_url = 'https://docs.google.com/spreadsheets/d/1Sh-xocICpDYQ4QP_Xrm-5KAJ3u_aSoCzWQ_0QVPfV4Y/edit?gid=397850281#gid=397850281'
-
-        try:
-            mapping_df = sheet_utils.get_dataframe(
-                url=sheet_url,
-                sheet_name=group,
-                evaluate=True
-            )
-            mapping_df = mapping_df[['haruko id', 'pm']].dropna()
-            print(f"Retrieved {len(mapping_df)} account mappings")
-            return mapping_df
-
-        except Exception as e:
-            print(f'Error retrieving account mappings: {e}')
-            return pd.DataFrame()
+    def _get_account_mapping() -> pd.DataFrame:
+        """Retrieve active account mapping from pm_mapping table."""
+        df = db_utils.get_db_table(
+            "SELECT pm, haruko_id FROM pm_mapping WHERE active = true AND haruko_id IS NOT NULL ORDER BY haruko_id"
+        )
+        if df.empty:
+            logging.error("pm_mapping query returned no results")
+        return df
 
 
 def parse_start_date(date_str: str) -> int:
@@ -358,24 +341,23 @@ def run_trading_volume_job(start_ts: Optional[int] = None):
         api_client = HarukoAPIClient()
         processor = TradingVolumeProcessor(api_client)
 
-        # Process fund accounts
         volume_df = processor.process_fund_accounts(start_ts=start_ts)
 
         if not volume_df.empty:
-            print(f"Storing {len(volume_df)} volume records to database")
+            logging.info(f"Storing {len(volume_df)} volume records to database")
             db_utils.update_trading_volume_on_conflict(
                 df=volume_df,
                 table_name='trading_volume'
             )
         else:
-            print("No trading volume data to store")
+            logging.warning("No trading volume data to store")
 
     except Exception as e:
-        print(f"Job failed with error: {e}")
+        logging.error(f"Job failed: {e}")
 
     finally:
         finished_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-        print(f"Job finished at: {finished_at}")
+        logging.info(f"Job finished at: {finished_at}")
 
 
 if __name__ == "__main__":
