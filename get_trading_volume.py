@@ -5,6 +5,7 @@ Retrieves trade data from Haruko API and stores aggregated volumes.
 
 import argparse
 import logging
+import sys
 import credentials
 import requests
 from datetime import datetime, timezone
@@ -361,6 +362,11 @@ def run_trading_volume_job(start_ts: Optional[int] = None):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)sZ %(levelname)s %(message)s",
+        stream=sys.stdout,
+    )
     parser = argparse.ArgumentParser(
         description="Process and store trading volumes from Haruko API."
     )
